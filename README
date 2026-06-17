@@ -1,1 +1,26 @@
 
+# BlackPixel
+
+BlackPixel captures a full-page screenshot of a website and calculates the
+percentage of pixels that are exactly black (`#000000`).
+
+## Install
+
+```powershell
+npm install
+```
+
+## Analyze a Website
+
+```powershell
+npm run analyze -- https://your-website.com
+```
+
+You can also run the script directly:
+
+```powershell
+node black-pixel-analyzer.js https://your-website.com
+```
+
+Each run writes a local `page.png` screenshot so you can inspect what was
+measured. The screenshot is ignored by git because it is generated output.

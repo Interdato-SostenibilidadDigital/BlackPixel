@@ -1,0 +1,16 @@
+{
+  "name": "pixnegro",
+  "version": "1.0.0",
+  "description": "pixnegro",
+  "main": "black-pixel-analyzer.js",
+  "scripts": {
+    "analyze": "node black-pixel-analyzer.js",
+    "test": "node black-pixel-analyzer.js https://example.com"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "jimp": "^0.22.10",
+    "puppeteer": "^24.8.2"
+  }
+}

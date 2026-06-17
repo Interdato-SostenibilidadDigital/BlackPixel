@@ -1,0 +1,1 @@
+node black-pixel-analyzer.js https://your-website.com
