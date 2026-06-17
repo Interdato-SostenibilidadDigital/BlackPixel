@@ -1,16 +1,24 @@
 {
-  "name": "pixnegro",
+  "name": "blackpixel",
   "version": "1.0.0",
-  "description": "pixnegro",
+  "description": "Analizador de porcentaje de píxeles negros puros en sitios web para promover interfaces más eficientes en OLED/AMOLED.",
   "main": "black-pixel-analyzer.js",
   "scripts": {
     "analyze": "node black-pixel-analyzer.js",
+    "start": "node black-pixel-analyzer.js",
     "test": "node black-pixel-analyzer.js https://example.com"
   },
+  "keywords": [
+    "sostenibilidad",
+    "oled",
+    "dark-mode",
+    "web",
+    "puppeteer"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "jimp": "^0.22.10",
+    "jimp": "^1.6.1",
     "puppeteer": "^24.8.2"
   }
 }
