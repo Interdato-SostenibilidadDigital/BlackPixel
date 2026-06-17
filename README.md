@@ -17,26 +17,32 @@ más eficiente en pantallas OLED/AMOLED.
 
 ## Qué Genera
 
-Cada análisis crea una carpeta dentro de `reports/` con un reporte visual:
+Cada análisis crea una carpeta dentro de `reports/` con un reporte visual. Si
+ya existía un reporte anterior del mismo sitio, BlackPixel lo elimina antes de
+generar el nuevo para evitar registros duplicados.
 
 - `reporte.html`: reporte profesional con porcentaje, semáforo y recomendación.
 - `captura.png`: captura completa de la página analizada.
-- `mapa-negro.png`: visualización de los píxeles detectados como negro puro.
-
-El mapa marca en verde los píxeles exactamente `#000000` y deja en gris claro
-las zonas que no fueron contabilizadas como negro puro.
+- `captura-marcada.png`: pantallazo completo con las zonas negras marcadas en fucsia.
+- `mapa-negro.png`: visualización aislada de los píxeles detectados como negro puro.
 
 ## Cómo Funciona
 
 BlackPixel usa Puppeteer para abrir un sitio web, recorre la página hasta el
-final para activar contenido diferido, toma una captura completa y después
-analiza la imagen con Jimp. El resultado indica:
+final para activar contenido diferido, captura la página por secciones mientras
+hace scroll y une esas secciones en una sola imagen vertical completa. Antes de
+capturar, oculta overlays flotantes como banners de cookies o botones fijos
+para evitar que se repitan en cada sección y distorsionen el análisis. Después
+analiza la imagen con Jimp.
+
+El resultado indica:
 
 - porcentaje de píxeles negros puros (`#000000`);
 - cantidad total de píxeles analizados;
 - estado de sostenibilidad visual según un semáforo;
 - recomendación general para mejorar la presencia de negro;
-- evidencia visual mediante captura y mapa de negro detectado.
+- pantallazo completo con las áreas negras marcadas;
+- mapa visual de negro detectado.
 
 ## Semáforo BlackPixel
 
@@ -88,7 +94,8 @@ El reporte HTML incluye:
 - URL analizada;
 - fecha de generación;
 - tamaño de la captura;
-- captura completa del sitio;
+- pantallazo completo con zonas negras marcadas;
+- captura original completa;
 - mapa visual de las áreas detectadas como negro puro;
 - lectura responsable sobre las limitaciones de la métrica.
 

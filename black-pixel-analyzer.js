@@ -7,6 +7,7 @@ const GREEN_THRESHOLD = 66;
 const YELLOW_THRESHOLD = 33;
 const REPORTS_DIR = 'reports';
 const SCREENSHOT_FILE = 'captura.png';
+const MARKED_SCREENSHOT_FILE = 'captura-marcada.png';
 const BLACK_MAP_FILE = 'mapa-negro.png';
 const REPORT_FILE = 'reporte.html';
 const VIEWPORT = { width: 1200, height: 800 };
@@ -50,10 +51,25 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function getReportDirectory(url) {
-  const hostname = new URL(url).hostname.replace(/[^a-z0-9.-]/gi, '-');
+function getSafeHostname(url) {
+  return new URL(url).hostname.replace(/[^a-z0-9.-]/gi, '-');
+}
+
+function getReportDirectory(hostname) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   return path.join(REPORTS_DIR, `${timestamp}-${hostname}`);
+}
+
+async function cleanPreviousReports(hostname) {
+  await fs.mkdir(REPORTS_DIR, { recursive: true });
+  const entries = await fs.readdir(REPORTS_DIR, { withFileTypes: true });
+  const suffix = `-${hostname}`;
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && entry.name.endsWith(suffix))
+      .map((entry) => fs.rm(path.join(REPORTS_DIR, entry.name), { recursive: true, force: true })),
+  );
 }
 
 async function getPageMetrics(page) {
@@ -129,15 +145,91 @@ async function loadFullPage(page) {
   return { beforeScroll, afterScroll };
 }
 
-async function createBlackMap(image, outputPath) {
+async function hideFloatingOverlays(page) {
+  return page.evaluate(() => {
+    const viewportWidth = window.innerWidth;
+    const floatingElements = [];
+
+    for (const element of document.querySelectorAll('body *')) {
+      const styles = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      const isFloating = styles.position === 'fixed' || styles.position === 'sticky';
+      const isTopBar = rect.top <= 5 && rect.left <= 5 && rect.width >= viewportWidth * 0.8;
+
+      if (isFloating && !isTopBar) {
+        element.setAttribute('data-blackpixel-hidden-overlay', 'true');
+        floatingElements.push(element);
+      }
+    }
+
+    for (const element of floatingElements) {
+      element.style.setProperty('visibility', 'hidden', 'important');
+    }
+
+    return floatingElements.length;
+  });
+}
+
+function getScrollPositions(scrollHeight, viewportHeight) {
+  if (scrollHeight <= viewportHeight) {
+    return [0];
+  }
+
+  const positions = [];
+  for (let y = 0; y < scrollHeight; y += viewportHeight) {
+    positions.push(y);
+  }
+
+  const lastPosition = scrollHeight - viewportHeight;
+  if (positions[positions.length - 1] !== lastPosition) {
+    positions.push(lastPosition);
+  }
+
+  return [...new Set(positions)].sort((a, b) => a - b);
+}
+
+async function captureStitchedFullPage(page, metrics, outputPath) {
+  const width = metrics.viewportWidth;
+  const height = metrics.scrollHeight;
+  const stitched = new Jimp({
+    width,
+    height,
+    color: rgbaToInt(255, 255, 255, 255),
+  });
+  const positions = getScrollPositions(height, metrics.viewportHeight);
+
+  for (const targetY of positions) {
+    const actualY = await page.evaluate((y) => {
+      window.scrollTo(0, y);
+      return window.scrollY;
+    }, targetY);
+
+    await wait(350);
+    const screenshotBuffer = await page.screenshot({ type: 'png', fullPage: false });
+    const segment = await Jimp.read(Buffer.from(screenshotBuffer));
+    const segmentHeight = Math.min(segment.bitmap.height, height - actualY);
+    const visibleSegment = segmentHeight === segment.bitmap.height
+      ? segment
+      : segment.clone().crop({ x: 0, y: 0, w: segment.bitmap.width, h: segmentHeight });
+
+    stitched.blit({ src: visibleSegment, x: 0, y: actualY });
+  }
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await stitched.write(outputPath);
+  return stitched;
+}
+
+async function createVisuals(image, blackMapPath, markedScreenshotPath) {
   const blackMap = new Jimp({
     width: image.bitmap.width,
     height: image.bitmap.height,
     color: rgbaToInt(238, 242, 247, 255),
   });
+  const markedScreenshot = image.clone();
 
   let blackPixelCount = 0;
-  const highlightColor = rgbaToInt(22, 163, 74, 255);
+  const highlightColor = rgbaToInt(255, 0, 255, 255);
 
   image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
     const r = this.bitmap.data[idx];
@@ -147,10 +239,15 @@ async function createBlackMap(image, outputPath) {
     if (r === 0 && g === 0 && b === 0) {
       blackPixelCount++;
       blackMap.setPixelColor(highlightColor, x, y);
+      markedScreenshot.setPixelColor(highlightColor, x, y);
     }
   });
 
-  await blackMap.write(outputPath);
+  await Promise.all([
+    blackMap.write(blackMapPath),
+    markedScreenshot.write(markedScreenshotPath),
+  ]);
+
   return blackPixelCount;
 }
 
@@ -281,23 +378,6 @@ function createReportHtml(result) {
       background: var(--red);
     }
 
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      align-items: start;
-      gap: 20px;
-      margin-top: 24px;
-    }
-
-    .preview {
-      display: block;
-      width: 100%;
-      height: auto;
-      background: #ffffff;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-    }
-
     .details {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -310,10 +390,35 @@ function createReportHtml(result) {
       padding-top: 12px;
     }
 
+    .full-preview,
+    .preview {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: start;
+      gap: 20px;
+      margin-top: 24px;
+    }
+
     .note {
       color: var(--muted);
       font-size: 14px;
       margin-bottom: 0;
+    }
+
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 10px 0 0;
     }
 
     a {
@@ -378,30 +483,42 @@ function createReportHtml(result) {
         </div>
         <div class="detail">
           <div class="metric-label">Modo de captura</div>
-          <div>Página completa después de recorrer el sitio hasta el final.</div>
+          <div>Página completa capturada por secciones y unida en una sola imagen.</div>
         </div>
         <div class="detail">
           <div class="metric-label">Alto total detectado</div>
           <div>${result.pageMetrics.afterScroll.scrollHeight.toLocaleString('es-MX')}px</div>
         </div>
         <div class="detail">
-          <div class="metric-label">Criterio</div>
-          <div>Verde: ≥66%, amarillo: 33% a 65.99%, rojo: &lt;33%.</div>
+          <div class="metric-label">Reportes anteriores</div>
+          <div>Se eliminan automáticamente al generar un reporte nuevo del mismo sitio.</div>
+        </div>
+        <div class="detail">
+          <div class="metric-label">Elementos flotantes ocultos</div>
+          <div>${result.hiddenOverlayCount.toLocaleString('es-MX')}</div>
         </div>
       </div>
     </section>
 
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Pantallazo completo con zonas negras marcadas</h2>
+      <img class="full-preview" src="./${MARKED_SCREENSHOT_FILE}" alt="Captura completa con píxeles negros marcados en fucsia">
+      <p class="links">
+        <a href="./${MARKED_SCREENSHOT_FILE}" target="_blank" rel="noreferrer">Abrir pantallazo marcado completo</a>
+        <a href="./${SCREENSHOT_FILE}" target="_blank" rel="noreferrer">Abrir captura original completa</a>
+      </p>
+      <p class="note">Las áreas fucsia son píxeles que originalmente eran exactamente #000000.</p>
+    </section>
+
     <section class="grid">
       <div class="panel">
-        <h2>Captura de la página</h2>
+        <h2>Captura original</h2>
         <img class="preview" src="./${SCREENSHOT_FILE}" alt="Captura completa de la página analizada">
-        <p class="note"><a href="./${SCREENSHOT_FILE}" target="_blank" rel="noreferrer">Abrir captura completa</a></p>
       </div>
       <div class="panel">
         <h2>Mapa de negro detectado</h2>
         <img class="preview" src="./${BLACK_MAP_FILE}" alt="Mapa de píxeles negros detectados">
-        <p class="note"><a href="./${BLACK_MAP_FILE}" target="_blank" rel="noreferrer">Abrir mapa completo</a></p>
-        <p class="note">Las zonas verdes representan píxeles exactamente #000000. Las zonas grises no fueron contabilizadas como negro puro.</p>
+        <p class="note">Las zonas fucsia representan píxeles exactamente #000000. Las zonas grises no fueron contabilizadas como negro puro.</p>
       </div>
     </section>
 
@@ -418,8 +535,12 @@ async function analyzeBlackPixels(url) {
   let browser;
 
   try {
-    const reportDir = getReportDirectory(url);
+    const hostname = getSafeHostname(url);
+    await cleanPreviousReports(hostname);
+
+    const reportDir = getReportDirectory(hostname);
     const screenshotPath = path.join(reportDir, SCREENSHOT_FILE);
+    const markedScreenshotPath = path.join(reportDir, MARKED_SCREENSHOT_FILE);
     const blackMapPath = path.join(reportDir, BLACK_MAP_FILE);
     const reportPath = path.join(reportDir, REPORT_FILE);
 
@@ -432,11 +553,10 @@ async function analyzeBlackPixels(url) {
     await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
 
     const pageMetrics = await loadFullPage(page);
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-
-    const image = await Jimp.read(screenshotPath);
+    const hiddenOverlayCount = await hideFloatingOverlays(page);
+    const image = await captureStitchedFullPage(page, pageMetrics.afterScroll, screenshotPath);
     const totalPixels = image.bitmap.width * image.bitmap.height;
-    const blackPixelCount = await createBlackMap(image, blackMapPath);
+    const blackPixelCount = await createVisuals(image, blackMapPath, markedScreenshotPath);
     const percentage = (blackPixelCount / totalPixels) * 100;
     const status = getSustainabilityStatus(percentage);
     const report = {
@@ -450,6 +570,7 @@ async function analyzeBlackPixels(url) {
       percentage,
       status,
       pageMetrics,
+      hiddenOverlayCount,
     };
 
     await fs.writeFile(reportPath, createReportHtml(report), 'utf8');
