@@ -28,8 +28,9 @@ las zonas que no fueron contabilizadas como negro puro.
 
 ## Cómo Funciona
 
-BlackPixel usa Puppeteer para abrir un sitio web, toma una captura completa de
-la página y después analiza la imagen con Jimp. El resultado indica:
+BlackPixel usa Puppeteer para abrir un sitio web, recorre la página hasta el
+final para activar contenido diferido, toma una captura completa y después
+analiza la imagen con Jimp. El resultado indica:
 
 - porcentaje de píxeles negros puros (`#000000`);
 - cantidad total de píxeles analizados;

@@ -9,6 +9,13 @@ const REPORTS_DIR = 'reports';
 const SCREENSHOT_FILE = 'captura.png';
 const BLACK_MAP_FILE = 'mapa-negro.png';
 const REPORT_FILE = 'reporte.html';
+const VIEWPORT = { width: 1200, height: 800 };
+const SCROLL_STEP = 700;
+const SCROLL_DELAY = 120;
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function getSustainabilityStatus(percentage) {
   if (percentage >= GREEN_THRESHOLD) {
@@ -47,6 +54,79 @@ function getReportDirectory(url) {
   const hostname = new URL(url).hostname.replace(/[^a-z0-9.-]/gi, '-');
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   return path.join(REPORTS_DIR, `${timestamp}-${hostname}`);
+}
+
+async function getPageMetrics(page) {
+  return page.evaluate(() => {
+    const body = document.body;
+    const html = document.documentElement;
+
+    return {
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      scrollWidth: Math.max(
+        body.scrollWidth,
+        body.offsetWidth,
+        html.clientWidth,
+        html.scrollWidth,
+        html.offsetWidth,
+      ),
+      scrollHeight: Math.max(
+        body.scrollHeight,
+        body.offsetHeight,
+        html.clientHeight,
+        html.scrollHeight,
+        html.offsetHeight,
+      ),
+    };
+  });
+}
+
+async function loadFullPage(page) {
+  const beforeScroll = await getPageMetrics(page);
+
+  await page.evaluate(
+    ({ step, delay }) => new Promise((resolve) => {
+      let previousScrollY = -1;
+      let stableTicks = 0;
+
+      const timer = setInterval(() => {
+        window.scrollBy(0, step);
+
+        const body = document.body;
+        const html = document.documentElement;
+        const scrollHeight = Math.max(
+          body.scrollHeight,
+          body.offsetHeight,
+          html.clientHeight,
+          html.scrollHeight,
+          html.offsetHeight,
+        );
+        const currentScrollY = window.scrollY;
+        const reachedBottom = window.innerHeight + currentScrollY >= scrollHeight - 2;
+
+        if (currentScrollY === previousScrollY) {
+          stableTicks++;
+        } else {
+          stableTicks = 0;
+          previousScrollY = currentScrollY;
+        }
+
+        if (reachedBottom || stableTicks >= 4) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, delay);
+    }),
+    { step: SCROLL_STEP, delay: SCROLL_DELAY },
+  );
+
+  await wait(1200);
+  const afterScroll = await getPageMetrics(page);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await wait(500);
+
+  return { beforeScroll, afterScroll };
 }
 
 async function createBlackMap(image, outputPath) {
@@ -204,14 +284,15 @@ function createReportHtml(result) {
     .grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
+      align-items: start;
       gap: 20px;
       margin-top: 24px;
     }
 
     .preview {
+      display: block;
       width: 100%;
-      max-height: 720px;
-      object-fit: contain;
+      height: auto;
       background: #ffffff;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -296,6 +377,14 @@ function createReportHtml(result) {
           <div>${result.width}x${result.height}px</div>
         </div>
         <div class="detail">
+          <div class="metric-label">Modo de captura</div>
+          <div>Página completa después de recorrer el sitio hasta el final.</div>
+        </div>
+        <div class="detail">
+          <div class="metric-label">Alto total detectado</div>
+          <div>${result.pageMetrics.afterScroll.scrollHeight.toLocaleString('es-MX')}px</div>
+        </div>
+        <div class="detail">
           <div class="metric-label">Criterio</div>
           <div>Verde: ≥66%, amarillo: 33% a 65.99%, rojo: &lt;33%.</div>
         </div>
@@ -306,10 +395,12 @@ function createReportHtml(result) {
       <div class="panel">
         <h2>Captura de la página</h2>
         <img class="preview" src="./${SCREENSHOT_FILE}" alt="Captura completa de la página analizada">
+        <p class="note"><a href="./${SCREENSHOT_FILE}" target="_blank" rel="noreferrer">Abrir captura completa</a></p>
       </div>
       <div class="panel">
         <h2>Mapa de negro detectado</h2>
         <img class="preview" src="./${BLACK_MAP_FILE}" alt="Mapa de píxeles negros detectados">
+        <p class="note"><a href="./${BLACK_MAP_FILE}" target="_blank" rel="noreferrer">Abrir mapa completo</a></p>
         <p class="note">Las zonas verdes representan píxeles exactamente #000000. Las zonas grises no fueron contabilizadas como negro puro.</p>
       </div>
     </section>
@@ -337,8 +428,10 @@ async function analyzeBlackPixels(url) {
     browser = await puppeteer.launch();
     const page = await browser.newPage();
 
-    await page.setViewport({ width: 1200, height: 800 });
+    await page.setViewport(VIEWPORT);
     await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+
+    const pageMetrics = await loadFullPage(page);
     await page.screenshot({ path: screenshotPath, fullPage: true });
 
     const image = await Jimp.read(screenshotPath);
@@ -356,6 +449,7 @@ async function analyzeBlackPixels(url) {
       blackPixelCount,
       percentage,
       status,
+      pageMetrics,
     };
 
     await fs.writeFile(reportPath, createReportHtml(report), 'utf8');
