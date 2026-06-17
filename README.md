@@ -15,6 +15,17 @@ más eficiente en pantallas OLED/AMOLED.
 > pantallas LCD, el impacto suele ser mucho menor porque existe una
 > retroiluminación activa.
 
+## Qué Genera
+
+Cada análisis crea una carpeta dentro de `reports/` con un reporte visual:
+
+- `reporte.html`: reporte profesional con porcentaje, semáforo y recomendación.
+- `captura.png`: captura completa de la página analizada.
+- `mapa-negro.png`: visualización de los píxeles detectados como negro puro.
+
+El mapa marca en verde los píxeles exactamente `#000000` y deja en gris claro
+las zonas que no fueron contabilizadas como negro puro.
+
 ## Cómo Funciona
 
 BlackPixel usa Puppeteer para abrir un sitio web, toma una captura completa de
@@ -23,7 +34,8 @@ la página y después analiza la imagen con Jimp. El resultado indica:
 - porcentaje de píxeles negros puros (`#000000`);
 - cantidad total de píxeles analizados;
 - estado de sostenibilidad visual según un semáforo;
-- recomendación general para mejorar la presencia de negro.
+- recomendación general para mejorar la presencia de negro;
+- evidencia visual mediante captura y mapa de negro detectado.
 
 ## Semáforo BlackPixel
 
@@ -57,20 +69,27 @@ node black-pixel-analyzer.js https://tu-sitio.com
 
 La URL debe incluir el protocolo (`https://` o `http://`).
 
-## Ejemplo De Resultado
+Al terminar, la consola mostrará la ruta del reporte:
 
 ```text
-URL: https://example.com
-Captura: page.png
-Tamaño de imagen: 1200x800
-Píxeles negros puros (#000000): 0 / 960000
-Porcentaje de negro puro: 0.00%
-Estado BlackPixel: ROJO
-Recomendación: Baja presencia de negro puro. Considera usar más áreas #000000 si el objetivo es reducir consumo en OLED/AMOLED.
+Reporte generado: C:\ruta\BlackPixel\reports\2026-06-17T18-27-15-817Z-example.com\reporte.html
 ```
 
-Cada ejecución genera una captura local llamada `page.png`. Esta imagen queda
-fuera de git porque es un archivo generado.
+Abre ese archivo `reporte.html` en tu navegador para consultar el resultado.
+
+## Contenido Del Reporte
+
+El reporte HTML incluye:
+
+- estado BlackPixel: `VERDE`, `AMARILLO` o `ROJO`;
+- porcentaje de negro puro;
+- cantidad de píxeles negros y píxeles totales;
+- URL analizada;
+- fecha de generación;
+- tamaño de la captura;
+- captura completa del sitio;
+- mapa visual de las áreas detectadas como negro puro;
+- lectura responsable sobre las limitaciones de la métrica.
 
 ## Por Qué Negro Puro
 
@@ -103,3 +122,5 @@ más directo para promover interfaces con menor emisión de luz en OLED/AMOLED.
   contenido dinámico o estados personalizados por ubicación.
 - El resultado debe interpretarse como una métrica de conciencia y diseño, no
   como una certificación ambiental.
+- El reporte se guarda localmente en `reports/`; esa carpeta está ignorada por
+  git porque contiene resultados generados.
