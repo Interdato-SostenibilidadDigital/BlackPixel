@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      PUPPETEER_CACHE_DIR: ${{ runner.temp }}/puppeteer
+      PUPPETEER_CACHE_DIR: ${{ github.workspace }}/.cache/puppeteer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,5 +22,7 @@ jobs:
       - run: npm ci
       - name: Install Chrome system dependencies
         # --install-deps necesita root; el caché compartido evita descargar Chrome otra vez.
-        run: sudo "$(command -v node)" node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install chrome --install-deps
+        run: |
+          sudo env "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" \
+            "$(command -v node)" node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install chrome --install-deps
       - run: npm test
