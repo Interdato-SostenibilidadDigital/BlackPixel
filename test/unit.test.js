@@ -3,12 +3,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { Jimp, rgbaToInt } = require('jimp');
+const { PNG } = require('pngjs');
 const {
   normalizePageUrl, normalizePublicBase, getPageKey, getPublicationLinks,
   createBadgeSvg, createEmbedCode, createEmbedPage,
 } = require('../lib/badge');
-const { parseArguments, getScrollPositions, createVisuals } = require('../black-pixel-analyzer');
+const { parseArguments, getScrollPositions, createVisuals, validateCaptureSize, createReportHtml } = require('../black-pixel-analyzer');
 
 function example() {
   return {
@@ -98,14 +98,53 @@ test('las secciones no sobrepasan el final de la página', () => {
 test('el conteo omite las exclusiones y distingue negro puro de gris oscuro', async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'blackpixel-unit-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const image = new Jimp({ width: 2, height: 2, color: rgbaToInt(0, 0, 0, 255) });
-  image.setPixelColor(rgbaToInt(1, 1, 1, 255), 1, 0);
-  image.setPixelColor(rgbaToInt(255, 255, 255, 255), 0, 1);
+  const image = new PNG({ width: 2, height: 2 });
+  image.data.set([0, 0, 0, 255, 1, 1, 1, 255, 255, 255, 255, 255, 0, 0, 0, 255]);
   const map = path.join(dir, 'map.png');
   const marked = path.join(dir, 'marked.png');
   const result = await createVisuals(image, map, marked, Uint8Array.from([1, 0, 0, 0]));
   assert.deepEqual(result, { blackPixelCount: 1, excludedPixelCount: 1 });
-  const markedImage = await Jimp.read(marked);
-  assert.equal(markedImage.getPixelColor(0, 0), rgbaToInt(0, 0, 0, 255));
-  assert.equal(markedImage.getPixelColor(1, 1), rgbaToInt(255, 0, 255, 255));
+  const markedImage = PNG.sync.read(await fs.readFile(marked));
+  assert.deepEqual([...markedImage.data.subarray(0, 4)], [0, 0, 0, 255]);
+  assert.deepEqual([...markedImage.data.subarray(12, 16)], [255, 0, 255, 255]);
+  const mapImage = PNG.sync.read(await fs.readFile(map));
+  assert.deepEqual([...mapImage.data.subarray(0, 4)], [125, 211, 252, 255]);
+});
+
+test('el footer rechaza enlaces ejecutables y evita enviar la URL de la página visitante', () => {
+  const result = example();
+  for (const bad of ['javascript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'file:///etc/passwd', 'https://user:secret@example.com/']) {
+    assert.throws(() => createEmbedCode({ ...result, publication: { ...result.publication, badge: bad } }));
+    assert.throws(() => createEmbedCode({ ...result, publication: { ...result.publication, report: bad } }));
+  }
+  const embed = createEmbedCode(result);
+  assert.equal((embed.match(/referrerpolicy="no-referrer"/g) || []).length, 2);
+  assert.match(embed, /rel="noopener noreferrer"/);
+});
+
+test('los reportes escapan datos hostiles y bloquean scripts mediante CSP', () => {
+  const result = {
+    ...example(), hostname: 'example.com', analyzerVersion: '1.1.1',
+    width: 1200, height: 4000, viewport: { width: 1200, height: 800, deviceScaleFactor: 1 },
+    excludedPixelCount: 0, capturedPixels: 4800000, hiddenOverlayCount: 0,
+    measurementId: 'fixture', pageMetrics: { afterScroll: { scrollHeight: 4000 } },
+    status: { label: 'VERDE', className: 'green', recommendation: 'Fixture' },
+    resolvedUrl: '\"><script>window.comprometido=true</script>',
+  };
+  const html = createReportHtml(result);
+  assert.doesNotMatch(html, /<script|onerror=/i);
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /Content-Security-Policy/);
+  assert.match(html, /default-src 'none'/);
+  assert.match(createEmbedPage(result), /Content-Security-Policy/);
+});
+
+test('la captura rechaza tamaños y límites que podrían agotar memoria', () => {
+  assert.doesNotThrow(() => validateCaptureSize(1200, 1600));
+  for (const args of [[1200, 100000000], [0, 800], [1200, NaN], [1200, -1], [1, 1, Infinity]]) {
+    assert.throws(() => validateCaptureSize(...args));
+  }
+  assert.equal(parseArguments(['https://example.com', '--max-pixels', '60000000']).options.maxPixels, 60000000);
+  assert.throws(() => parseArguments(['https://example.com', '--max-pixels', 'no']));
+  assert.throws(() => parseArguments(['https://example.com', '--max-pixels', '100000001']));
 });

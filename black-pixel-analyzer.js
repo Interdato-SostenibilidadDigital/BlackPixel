@@ -1,12 +1,12 @@
 const fs = require('fs/promises');
 const path = require('path');
-const puppeteer = require('puppeteer');
-const { Jimp, rgbaToInt } = require('jimp');
+const { chromium } = require('playwright-core');
+const { PNG } = require('pngjs');
 const { randomUUID } = require('node:crypto');
 const { version } = require('./package.json');
 const {
   escapeHtml, normalizePageUrl, normalizePublicBase, getPageKey,
-  getPublicationLinks, createBadgeSvg, createEmbedSection, createEmbedPage,
+  getPublicationLinks, createBadgeSvg, createEmbedSection, createEmbedPage, HTML_CSP,
 } = require('./lib/badge');
 
 const GREEN_THRESHOLD = 66;
@@ -19,6 +19,18 @@ const REPORT_FILE = 'reporte.html';
 const VIEWPORT = { width: 1200, height: 800 };
 const SCROLL_STEP = 700;
 const SCROLL_DELAY = 120;
+const MAX_CAPTURE_PIXELS = 50000000;
+const ANALYSIS_TIMEOUT_MS = 120000;
+
+function validateCaptureSize(width, height, maxPixels = MAX_CAPTURE_PIXELS) {
+  if (!Number.isSafeInteger(maxPixels) || maxPixels < 1 || maxPixels > 100000000) {
+    throw new Error('--max-pixels debe ser un entero entre 1 y 100000000.');
+  }
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)
+    || width < 1 || height < 1 || width * height > maxPixels) {
+    throw new Error('La captura supera el límite de píxeles. Revisa la página o ajusta --max-pixels para una página de confianza.');
+  }
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -74,13 +86,15 @@ async function getPageMetrics(page) {
   });
 }
 
-async function loadFullPage(page) {
+async function loadFullPage(page, maxPixels) {
   const beforeScroll = await getPageMetrics(page);
+  validateCaptureSize(beforeScroll.viewportWidth, beforeScroll.scrollHeight, maxPixels);
 
-  await page.evaluate(
-    ({ step, delay }) => new Promise((resolve) => {
+  const loadError = await page.evaluate(
+    ({ step, delay, maxPixels }) => new Promise((resolve) => {
       let previousScrollY = -1;
       let stableTicks = 0;
+      const started = Date.now();
 
       const timer = setInterval(() => {
         window.scrollBy(0, step);
@@ -97,6 +111,12 @@ async function loadFullPage(page) {
         const currentScrollY = window.scrollY;
         const reachedBottom = window.innerHeight + currentScrollY >= scrollHeight - 2;
 
+        if (scrollHeight * window.innerWidth > maxPixels || Date.now() - started > 60000) {
+          clearInterval(timer);
+          resolve('La página excedió los límites de carga; el análisis se detuvo sin publicar un resultado incompleto.');
+          return;
+        }
+
         if (currentScrollY === previousScrollY) {
           stableTicks++;
         } else {
@@ -110,11 +130,13 @@ async function loadFullPage(page) {
         }
       }, delay);
     }),
-    { step: SCROLL_STEP, delay: SCROLL_DELAY },
+    { step: SCROLL_STEP, delay: SCROLL_DELAY, maxPixels },
   );
+  if (loadError) throw new Error(loadError);
 
   await wait(1200);
   const afterScroll = await getPageMetrics(page);
+  validateCaptureSize(afterScroll.viewportWidth, afterScroll.scrollHeight, maxPixels);
   await page.evaluate(() => window.scrollTo(0, 0));
   await wait(500);
 
@@ -167,17 +189,14 @@ function getScrollPositions(scrollHeight, viewportHeight) {
 async function captureStitchedFullPage(page, metrics, outputPath) {
   const width = metrics.viewportWidth;
   const height = metrics.scrollHeight;
-  const stitched = new Jimp({
-    width,
-    height,
-    color: rgbaToInt(255, 255, 255, 255),
-  });
+  const stitched = new PNG({ width, height });
+  stitched.data.fill(255);
   const positions = getScrollPositions(height, metrics.viewportHeight);
   let exclusionMask = null;
 
   for (const targetY of positions) {
     const actualY = await page.evaluate((y) => {
-      window.scrollTo(0, y);
+      window.scrollTo({ top: y, behavior: 'instant' });
       return window.scrollY;
     }, targetY);
 
@@ -196,13 +215,12 @@ async function captureStitchedFullPage(page, metrics, outputPath) {
       });
     });
     const screenshotBuffer = await page.screenshot({ type: 'png', fullPage: false });
-    const segment = await Jimp.read(Buffer.from(screenshotBuffer));
-    const segmentHeight = Math.min(segment.bitmap.height, height - actualY);
-    const visibleSegment = segmentHeight === segment.bitmap.height
-      ? segment
-      : segment.clone().crop({ x: 0, y: 0, w: segment.bitmap.width, h: segmentHeight });
-
-    stitched.blit({ src: visibleSegment, x: 0, y: actualY });
+    const segment = PNG.sync.read(Buffer.from(screenshotBuffer));
+    if (segment.width !== width) throw new Error('La captura cambió de escala durante el análisis.');
+    const segmentHeight = Math.min(segment.height, height - actualY);
+    for (let row = 0; row < segmentHeight; row++) {
+      segment.data.copy(stitched.data, (actualY + row) * width * 4, row * width * 4, (row + 1) * width * 4);
+    }
     if (badgeRects.length && !exclusionMask) exclusionMask = new Uint8Array(width * height);
     if (exclusionMask) {
       // Las secciones solapadas deben reemplazar tanto imagen como exclusiones.
@@ -216,42 +234,36 @@ async function captureStitchedFullPage(page, metrics, outputPath) {
   }
 
   await page.evaluate(() => window.scrollTo(0, 0));
-  await stitched.write(outputPath);
+  await fs.writeFile(outputPath, PNG.sync.write(stitched));
   return { image: stitched, exclusionMask };
 }
 
 async function createVisuals(image, blackMapPath, markedScreenshotPath, exclusionMask = null) {
-  const blackMap = new Jimp({
-    width: image.bitmap.width,
-    height: image.bitmap.height,
-    color: rgbaToInt(238, 242, 247, 255),
-  });
-  const markedScreenshot = image.clone();
+  const blackMap = new PNG({ width: image.width, height: image.height });
+  const markedScreenshot = { width: image.width, height: image.height, data: Buffer.from(image.data) };
 
   let blackPixelCount = 0;
   let excludedPixelCount = 0;
-  const highlightColor = rgbaToInt(255, 0, 255, 255);
-
-  image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
-    if (exclusionMask && exclusionMask[y * image.bitmap.width + x]) {
+  const excludedColor = Buffer.from([125, 211, 252, 255]);
+  const highlightColor = Buffer.from([255, 0, 255, 255]);
+  const backgroundColor = Buffer.from([238, 242, 247, 255]);
+  for (let pixel = 0; pixel < image.width * image.height; pixel++) {
+    const idx = pixel * 4;
+    if (exclusionMask && exclusionMask[pixel]) {
       excludedPixelCount++;
-      blackMap.setPixelColor(rgbaToInt(125, 211, 252, 255), x, y);
-      return;
-    }
-    const r = this.bitmap.data[idx];
-    const g = this.bitmap.data[idx + 1];
-    const b = this.bitmap.data[idx + 2];
-
-    if (r === 0 && g === 0 && b === 0) {
+      blackMap.data.set(excludedColor, idx);
+    } else if (image.data[idx] === 0 && image.data[idx + 1] === 0 && image.data[idx + 2] === 0) {
       blackPixelCount++;
-      blackMap.setPixelColor(highlightColor, x, y);
-      markedScreenshot.setPixelColor(highlightColor, x, y);
+      blackMap.data.set(highlightColor, idx);
+      markedScreenshot.data.set(highlightColor, idx);
+    } else {
+      blackMap.data.set(backgroundColor, idx);
     }
-  });
+  }
 
   await Promise.all([
-    blackMap.write(blackMapPath),
-    markedScreenshot.write(markedScreenshotPath),
+    fs.writeFile(blackMapPath, PNG.sync.write(blackMap)),
+    fs.writeFile(markedScreenshotPath, PNG.sync.write(markedScreenshot)),
   ]);
 
   return { blackPixelCount, excludedPixelCount };
@@ -269,6 +281,7 @@ function createReportHtml(result, imagePrefix = './') {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="${HTML_CSP}">
   <title>Reporte BlackPixel - ${escapeHtml(result.hostname)}</title>
   <style>
     :root {
@@ -570,16 +583,23 @@ async function analyzeBlackPixels(url, options = {}) {
   const measurementId = createdAt.replace(/[:.]/g, '-') + '-' + randomUUID().slice(0, 8);
   const pageDir = path.join(reportsDir, pageKey);
   const reportDir = path.join(pageDir, measurementId);
+  const maxPixels = options.maxPixels ?? MAX_CAPTURE_PIXELS;
+  validateCaptureSize(VIEWPORT.width, VIEWPORT.height, maxPixels);
   let browser;
+  let analysisTimer;
+  let timedOut = false;
 
   try {
     await fs.mkdir(reportDir, { recursive: true });
-    browser = await puppeteer.launch(options.launchOptions);
-    const page = await browser.newPage();
-    await page.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
-    await page.goto(normalizedUrl, { waitUntil: 'networkidle0', timeout: 60000 });
+    browser = await chromium.launch({ chromiumSandbox: true, ...options.launchOptions });
+    analysisTimer = setTimeout(() => {
+      timedOut = true;
+      browser.close().catch(() => {});
+    }, ANALYSIS_TIMEOUT_MS);
+    const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
+    await page.goto(normalizedUrl, { waitUntil: 'networkidle', timeout: 60000 });
 
-    const pageMetrics = await loadFullPage(page);
+    const pageMetrics = await loadFullPage(page, maxPixels);
     const hiddenOverlayCount = await hideFloatingOverlays(page);
     const { image, exclusionMask } = await captureStitchedFullPage(
       page, pageMetrics.afterScroll, path.join(reportDir, SCREENSHOT_FILE),
@@ -588,7 +608,7 @@ async function analyzeBlackPixels(url, options = {}) {
       image, path.join(reportDir, BLACK_MAP_FILE),
       path.join(reportDir, MARKED_SCREENSHOT_FILE), exclusionMask,
     );
-    const capturedPixels = image.bitmap.width * image.bitmap.height;
+    const capturedPixels = image.width * image.height;
     const totalPixels = capturedPixels - excludedPixelCount;
     if (!totalPixels) throw new Error('No quedan píxeles analizables fuera del distintivo.');
     const percentage = (blackPixelCount / totalPixels) * 100;
@@ -601,8 +621,8 @@ async function analyzeBlackPixels(url, options = {}) {
       resolvedUrl: page.url(),
       hostname: new URL(normalizedUrl).hostname,
       createdAt,
-      width: image.bitmap.width,
-      height: image.bitmap.height,
+      width: image.width,
+      height: image.height,
       viewport: { ...VIEWPORT, deviceScaleFactor: 1 },
       capturedPixels,
       excludedPixelCount,
@@ -644,7 +664,11 @@ async function analyzeBlackPixels(url, options = {}) {
     console.log('Distintivo e instrucciones: ' + path.join(pageDir, 'insertar.html'));
     if (publicBase) console.log('Publica el contenido de ' + reportsDir + ' en ' + publicBase);
     return { result, reportDir, pageDir };
+  } catch (error) {
+    if (timedOut) throw new Error('El análisis excedió el límite de 120 segundos y se detuvo.');
+    throw error;
   } finally {
+    clearTimeout(analysisTimer);
     if (browser) await browser.close();
   }
 }
@@ -655,10 +679,15 @@ function parseArguments(args) {
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === '--help' || arg === '-h') return { help: true };
-    if (arg === '--public-base' || arg === '--output-dir') {
+    if (arg === '--public-base' || arg === '--output-dir' || arg === '--max-pixels') {
       const value = args[++index];
       if (!value || value.startsWith('--')) throw new Error('Falta un valor para ' + arg);
-      options[arg === '--public-base' ? 'publicBase' : 'outputDir'] = value;
+      if (arg === '--max-pixels') {
+        options.maxPixels = Number(value);
+        validateCaptureSize(1, 1, options.maxPixels);
+      } else {
+        options[arg === '--public-base' ? 'publicBase' : 'outputDir'] = value;
+      }
     } else if (arg.startsWith('-')) {
       throw new Error('Opción desconocida: ' + arg);
     } else if (url) {
@@ -674,7 +703,7 @@ function parseArguments(args) {
 }
 
 function printUsage() {
-  console.log('Uso: node black-pixel-analyzer.js <url> [--public-base <url>] [--output-dir <carpeta>]');
+  console.log('Uso: node black-pixel-analyzer.js <url> [--public-base <url>] [--output-dir <carpeta>] [--max-pixels <entero>]');
   console.log('Ejemplo: npm run analyze -- https://example.com --public-base https://example.com/blackpixel/');
   console.log('Sube la carpeta de resultados a --public-base para activar el distintivo público.');
 }
@@ -700,5 +729,6 @@ if (require.main === module) {
 module.exports = {
   analyzeBlackPixels, parseArguments, getScrollPositions, getSustainabilityStatus,
   createVisuals, createReportHtml,
+  validateCaptureSize,
 };
 

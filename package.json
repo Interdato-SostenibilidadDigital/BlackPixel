@@ -1,6 +1,6 @@
 {
   "name": "blackpixel",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Analizador de porcentaje de píxeles negros puros en sitios web para promover interfaces más eficientes en OLED/AMOLED.",
   "main": "black-pixel-analyzer.js",
   "scripts": {
@@ -15,16 +15,16 @@
     "oled",
     "dark-mode",
     "web",
-    "puppeteer"
+    "playwright"
   ],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-    "jimp": "^1.6.1",
-    "puppeteer": "^24.8.2"
-  },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@playwright/browser-chromium": "1.65.0",
+    "playwright-core": "1.65.0",
+    "pngjs": "7.0.0"
   }
 }
-
