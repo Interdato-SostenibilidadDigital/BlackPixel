@@ -1,12 +1,14 @@
 {
   "name": "blackpixel",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Analizador de porcentaje de píxeles negros puros en sitios web para promover interfaces más eficientes en OLED/AMOLED.",
   "main": "black-pixel-analyzer.js",
   "scripts": {
     "analyze": "node black-pixel-analyzer.js",
     "start": "node black-pixel-analyzer.js",
-    "test": "node black-pixel-analyzer.js https://example.com"
+    "test": "node --test",
+    "test:unit": "node --test test/unit.test.js",
+    "test:integration": "node --test test/integration.test.js"
   },
   "keywords": [
     "sostenibilidad",
@@ -20,5 +22,9 @@
   "dependencies": {
     "jimp": "^1.6.1",
     "puppeteer": "^24.8.2"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
+

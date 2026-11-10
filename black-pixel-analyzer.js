@@ -2,6 +2,12 @@ const fs = require('fs/promises');
 const path = require('path');
 const puppeteer = require('puppeteer');
 const { Jimp, rgbaToInt } = require('jimp');
+const { randomUUID } = require('node:crypto');
+const { version } = require('./package.json');
+const {
+  escapeHtml, normalizePageUrl, normalizePublicBase, getPageKey,
+  getPublicationLinks, createBadgeSvg, createEmbedSection, createEmbedPage,
+} = require('./lib/badge');
 
 const GREEN_THRESHOLD = 66;
 const YELLOW_THRESHOLD = 33;
@@ -40,36 +46,6 @@ function getSustainabilityStatus(percentage) {
     className: 'red',
     recommendation: 'Baja presencia de negro puro. Considera usar más áreas #000000 si el objetivo es reducir consumo en OLED/AMOLED.',
   };
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function getSafeHostname(url) {
-  return new URL(url).hostname.replace(/[^a-z0-9.-]/gi, '-');
-}
-
-function getReportDirectory(hostname) {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return path.join(REPORTS_DIR, `${timestamp}-${hostname}`);
-}
-
-async function cleanPreviousReports(hostname) {
-  await fs.mkdir(REPORTS_DIR, { recursive: true });
-  const entries = await fs.readdir(REPORTS_DIR, { withFileTypes: true });
-  const suffix = `-${hostname}`;
-
-  await Promise.all(
-    entries
-      .filter((entry) => entry.isDirectory() && entry.name.endsWith(suffix))
-      .map((entry) => fs.rm(path.join(REPORTS_DIR, entry.name), { recursive: true, force: true })),
-  );
 }
 
 async function getPageMetrics(page) {
@@ -156,7 +132,7 @@ async function hideFloatingOverlays(page) {
       const isFloating = styles.position === 'fixed' || styles.position === 'sticky';
       const isTopBar = rect.top <= 5 && rect.left <= 5 && rect.width >= viewportWidth * 0.8;
 
-      if (isFloating && !isTopBar) {
+      if (isFloating && !isTopBar && !element.closest('[data-blackpixel-badge]')) {
         element.setAttribute('data-blackpixel-hidden-overlay', 'true');
         floatingElements.push(element);
       }
@@ -176,7 +152,7 @@ function getScrollPositions(scrollHeight, viewportHeight) {
   }
 
   const positions = [];
-  for (let y = 0; y < scrollHeight; y += viewportHeight) {
+  for (let y = 0; y <= scrollHeight - viewportHeight; y += viewportHeight) {
     positions.push(y);
   }
 
@@ -197,6 +173,7 @@ async function captureStitchedFullPage(page, metrics, outputPath) {
     color: rgbaToInt(255, 255, 255, 255),
   });
   const positions = getScrollPositions(height, metrics.viewportHeight);
+  let exclusionMask = null;
 
   for (const targetY of positions) {
     const actualY = await page.evaluate((y) => {
@@ -205,6 +182,19 @@ async function captureStitchedFullPage(page, metrics, outputPath) {
     }, targetY);
 
     await wait(350);
+    // Se excluye el rectángulo visible del distintivo sin cambiar el layout.
+    const badgeRects = await page.evaluate(() => {
+      return [...document.querySelectorAll('[data-blackpixel-badge]')].flatMap((element) => {
+        const style = getComputedStyle(element);
+        if (style.visibility === 'hidden' || style.display === 'none') return [];
+        const rect = element.getBoundingClientRect();
+        const left = Math.max(0, Math.floor(rect.left));
+        const top = Math.max(0, Math.floor(rect.top));
+        const right = Math.min(innerWidth, Math.ceil(rect.right));
+        const bottom = Math.min(innerHeight, Math.ceil(rect.bottom));
+        return right > left && bottom > top ? [{ left, top, right, bottom }] : [];
+      });
+    });
     const screenshotBuffer = await page.screenshot({ type: 'png', fullPage: false });
     const segment = await Jimp.read(Buffer.from(screenshotBuffer));
     const segmentHeight = Math.min(segment.bitmap.height, height - actualY);
@@ -213,14 +203,24 @@ async function captureStitchedFullPage(page, metrics, outputPath) {
       : segment.clone().crop({ x: 0, y: 0, w: segment.bitmap.width, h: segmentHeight });
 
     stitched.blit({ src: visibleSegment, x: 0, y: actualY });
+    if (badgeRects.length && !exclusionMask) exclusionMask = new Uint8Array(width * height);
+    if (exclusionMask) {
+      // Las secciones solapadas deben reemplazar tanto imagen como exclusiones.
+      exclusionMask.fill(0, actualY * width, (actualY + segmentHeight) * width);
+      for (const rect of badgeRects) {
+        for (let y = rect.top; y < Math.min(rect.bottom, segmentHeight); y++) {
+          exclusionMask.fill(1, (actualY + y) * width + rect.left, (actualY + y) * width + rect.right);
+        }
+      }
+    }
   }
 
   await page.evaluate(() => window.scrollTo(0, 0));
   await stitched.write(outputPath);
-  return stitched;
+  return { image: stitched, exclusionMask };
 }
 
-async function createVisuals(image, blackMapPath, markedScreenshotPath) {
+async function createVisuals(image, blackMapPath, markedScreenshotPath, exclusionMask = null) {
   const blackMap = new Jimp({
     width: image.bitmap.width,
     height: image.bitmap.height,
@@ -229,9 +229,15 @@ async function createVisuals(image, blackMapPath, markedScreenshotPath) {
   const markedScreenshot = image.clone();
 
   let blackPixelCount = 0;
+  let excludedPixelCount = 0;
   const highlightColor = rgbaToInt(255, 0, 255, 255);
 
   image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
+    if (exclusionMask && exclusionMask[y * image.bitmap.width + x]) {
+      excludedPixelCount++;
+      blackMap.setPixelColor(rgbaToInt(125, 211, 252, 255), x, y);
+      return;
+    }
     const r = this.bitmap.data[idx];
     const g = this.bitmap.data[idx + 1];
     const b = this.bitmap.data[idx + 2];
@@ -248,14 +254,15 @@ async function createVisuals(image, blackMapPath, markedScreenshotPath) {
     markedScreenshot.write(markedScreenshotPath),
   ]);
 
-  return blackPixelCount;
+  return { blackPixelCount, excludedPixelCount };
 }
 
-function createReportHtml(result) {
+function createReportHtml(result, imagePrefix = './') {
   const capturedAt = new Intl.DateTimeFormat('es-MX', {
     dateStyle: 'long',
     timeStyle: 'medium',
-  }).format(result.createdAt);
+    timeZone: 'America/Mexico_City',
+  }).format(new Date(result.createdAt));
 
   return `<!doctype html>
 <html lang="es">
@@ -314,6 +321,8 @@ function createReportHtml(result) {
     h2 {
       font-size: 20px;
     }
+
+    header .note { color: #e5e7eb; }
 
     .header-inner {
       width: min(1180px, 100%);
@@ -439,7 +448,7 @@ function createReportHtml(result) {
   <header>
     <div class="header-inner">
       <h1>Reporte BlackPixel</h1>
-      <p class="note">Análisis de presencia de negro puro (#000000) en una captura completa del sitio.</p>
+      <p class="note">Análisis de presencia de negro puro (#000000) en una captura completa de la página analizada.</p>
     </div>
   </header>
 
@@ -460,7 +469,7 @@ function createReportHtml(result) {
         <div class="metric-value">${result.blackPixelCount.toLocaleString('es-MX')}</div>
       </div>
       <div class="card">
-        <div class="metric-label">Píxeles totales</div>
+        <div class="metric-label">Píxeles analizados</div>
         <div class="metric-value">${result.totalPixels.toLocaleString('es-MX')}</div>
       </div>
     </section>
@@ -491,7 +500,23 @@ function createReportHtml(result) {
         </div>
         <div class="detail">
           <div class="metric-label">Reportes anteriores</div>
-          <div>Se eliminan automáticamente al generar un reporte nuevo del mismo sitio.</div>
+          <div>Se conservan las mediciones anteriores para esta URL, con su fecha e imágenes.</div>
+        </div>
+        <div class="detail">
+          <div class="metric-label">Píxeles excluidos del distintivo</div>
+          <div>${result.excludedPixelCount.toLocaleString('es-MX')} de ${result.capturedPixels.toLocaleString('es-MX')} píxeles capturados</div>
+        </div>
+        <div class="detail">
+          <div class="metric-label">Método y versión</div>
+          <div>RGB exacto (0, 0, 0) · BlackPixel ${escapeHtml(result.analyzerVersion)} · ${result.viewport.width} × ${result.viewport.height}px · escala ${result.viewport.deviceScaleFactor}</div>
+        </div>
+        <div class="detail">
+          <div class="metric-label">Identificador de medición</div>
+          <div>${escapeHtml(result.measurementId)}</div>
+        </div>
+        <div class="detail">
+          <div class="metric-label">URL final del navegador</div>
+          <div>${escapeHtml(result.resolvedUrl)}</div>
         </div>
         <div class="detail">
           <div class="metric-label">Elementos flotantes ocultos</div>
@@ -502,10 +527,10 @@ function createReportHtml(result) {
 
     <section class="panel" style="margin-top: 24px;">
       <h2>Pantallazo completo con zonas negras marcadas</h2>
-      <img class="full-preview" src="./${MARKED_SCREENSHOT_FILE}" alt="Captura completa con píxeles negros marcados en fucsia">
+      <img class="full-preview" src="${imagePrefix}${MARKED_SCREENSHOT_FILE}" alt="Captura completa con píxeles negros marcados en fucsia">
       <p class="links">
-        <a href="./${MARKED_SCREENSHOT_FILE}" target="_blank" rel="noreferrer">Abrir pantallazo marcado completo</a>
-        <a href="./${SCREENSHOT_FILE}" target="_blank" rel="noreferrer">Abrir captura original completa</a>
+        <a href="${imagePrefix}${MARKED_SCREENSHOT_FILE}" target="_blank" rel="noreferrer">Abrir pantallazo marcado completo</a>
+        <a href="${imagePrefix}${SCREENSHOT_FILE}" target="_blank" rel="noreferrer">Abrir captura original completa</a>
       </p>
       <p class="note">Las áreas fucsia son píxeles que originalmente eran exactamente #000000.</p>
     </section>
@@ -513,94 +538,167 @@ function createReportHtml(result) {
     <section class="grid">
       <div class="panel">
         <h2>Captura original</h2>
-        <img class="preview" src="./${SCREENSHOT_FILE}" alt="Captura completa de la página analizada">
+        <img class="preview" src="${imagePrefix}${SCREENSHOT_FILE}" alt="Captura completa de la página analizada">
       </div>
       <div class="panel">
         <h2>Mapa de negro detectado</h2>
-        <img class="preview" src="./${BLACK_MAP_FILE}" alt="Mapa de píxeles negros detectados">
-        <p class="note">Las zonas fucsia representan píxeles exactamente #000000. Las zonas grises no fueron contabilizadas como negro puro.</p>
+        <img class="preview" src="${imagePrefix}${BLACK_MAP_FILE}" alt="Mapa de píxeles negros detectados">
+        <p class="note">Las zonas fucsia representan píxeles exactamente #000000. Las zonas grises no fueron contabilizadas como negro puro. Las zonas azules corresponden al rectángulo del distintivo, excluido del numerador y del denominador.</p>
       </div>
     </section>
 
     <section class="panel" style="margin-top: 24px;">
+      ${createEmbedSection(result, imagePrefix)}
+      <p><a href="${imagePrefix}resultado.json">Descargar datos de esta medición (JSON)</a></p>
+    </section>
+
+    <section class="panel" style="margin-top: 24px;">
       <h2>Lectura Responsable</h2>
-      <p class="note">BlackPixel es una métrica visual para crear conciencia de diseño. No sustituye una medición eléctrica real del dispositivo. El beneficio energético del negro puro aplica especialmente a pantallas OLED/AMOLED; en LCD el ahorro suele ser menor por la retroiluminación.</p>
+      <p class="note">BlackPixel es una métrica visual por URL y fecha, basada en una captura de escritorio. El semáforo usa umbrales internos del proyecto y no es una certificación ambiental. Porcentaje = píxeles negros / píxeles analizados × 100; los rectángulos del distintivo identificado se excluyen de ambas cantidades. No sustituye una medición eléctrica real del dispositivo. El beneficio energético del negro puro aplica especialmente a pantallas OLED/AMOLED; en LCD el ahorro suele ser menor por la retroiluminación.</p>
     </section>
   </main>
 </body>
 </html>`;
 }
 
-async function analyzeBlackPixels(url) {
+async function analyzeBlackPixels(url, options = {}) {
+  const normalizedUrl = normalizePageUrl(url);
+  const publicBase = normalizePublicBase(options.publicBase);
+  const reportsDir = path.resolve(options.outputDir || REPORTS_DIR);
+  const pageKey = getPageKey(normalizedUrl);
+  const createdAt = new Date().toISOString();
+  const measurementId = createdAt.replace(/[:.]/g, '-') + '-' + randomUUID().slice(0, 8);
+  const pageDir = path.join(reportsDir, pageKey);
+  const reportDir = path.join(pageDir, measurementId);
   let browser;
 
   try {
-    const hostname = getSafeHostname(url);
-    await cleanPreviousReports(hostname);
-
-    const reportDir = getReportDirectory(hostname);
-    const screenshotPath = path.join(reportDir, SCREENSHOT_FILE);
-    const markedScreenshotPath = path.join(reportDir, MARKED_SCREENSHOT_FILE);
-    const blackMapPath = path.join(reportDir, BLACK_MAP_FILE);
-    const reportPath = path.join(reportDir, REPORT_FILE);
-
     await fs.mkdir(reportDir, { recursive: true });
-
-    browser = await puppeteer.launch();
+    browser = await puppeteer.launch(options.launchOptions);
     const page = await browser.newPage();
-
-    await page.setViewport(VIEWPORT);
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+    await page.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
+    await page.goto(normalizedUrl, { waitUntil: 'networkidle0', timeout: 60000 });
 
     const pageMetrics = await loadFullPage(page);
     const hiddenOverlayCount = await hideFloatingOverlays(page);
-    const image = await captureStitchedFullPage(page, pageMetrics.afterScroll, screenshotPath);
-    const totalPixels = image.bitmap.width * image.bitmap.height;
-    const blackPixelCount = await createVisuals(image, blackMapPath, markedScreenshotPath);
+    const { image, exclusionMask } = await captureStitchedFullPage(
+      page, pageMetrics.afterScroll, path.join(reportDir, SCREENSHOT_FILE),
+    );
+    const { blackPixelCount, excludedPixelCount } = await createVisuals(
+      image, path.join(reportDir, BLACK_MAP_FILE),
+      path.join(reportDir, MARKED_SCREENSHOT_FILE), exclusionMask,
+    );
+    const capturedPixels = image.bitmap.width * image.bitmap.height;
+    const totalPixels = capturedPixels - excludedPixelCount;
+    if (!totalPixels) throw new Error('No quedan píxeles analizables fuera del distintivo.');
     const percentage = (blackPixelCount / totalPixels) * 100;
-    const status = getSustainabilityStatus(percentage);
-    const report = {
-      url,
-      hostname: new URL(url).hostname,
-      createdAt: new Date(),
+    const result = {
+      schemaVersion: 1,
+      analyzerVersion: version,
+      measurementId,
+      pageKey,
+      url: normalizedUrl,
+      resolvedUrl: page.url(),
+      hostname: new URL(normalizedUrl).hostname,
+      createdAt,
       width: image.bitmap.width,
       height: image.bitmap.height,
+      viewport: { ...VIEWPORT, deviceScaleFactor: 1 },
+      capturedPixels,
+      excludedPixelCount,
       totalPixels,
       blackPixelCount,
       percentage,
-      status,
+      status: getSustainabilityStatus(percentage),
+      methodology: {
+        name: 'exact-rgb-black',
+        black: '#000000',
+        scope: 'single-url-full-page-desktop',
+        badgeExclusion: 'visible-bounding-rectangles',
+        formula: 'blackPixelCount / totalPixels * 100',
+        thresholds: { green: GREEN_THRESHOLD, yellow: YELLOW_THRESHOLD },
+        disclaimer: 'Indicador visual. No mide energía ni emisiones y no es una certificación ambiental.',
+      },
       pageMetrics,
       hiddenOverlayCount,
+      publicBase,
+      publication: getPublicationLinks(publicBase, pageKey, measurementId),
     };
 
-    await fs.writeFile(reportPath, createReportHtml(report), 'utf8');
+    const svg = createBadgeSvg(result);
+    const json = JSON.stringify(result, null, 2) + '\n';
+    // Cada carpeta fechada conserva su evidencia. Las rutas estables se actualizan al terminar.
+    await Promise.all([
+      fs.writeFile(path.join(reportDir, REPORT_FILE), createReportHtml(result), 'utf8'),
+      fs.writeFile(path.join(reportDir, 'resultado.json'), json, 'utf8'),
+      fs.writeFile(path.join(reportDir, 'badge.svg'), svg, 'utf8'),
+    ]);
+    await Promise.all([
+      fs.writeFile(path.join(pageDir, REPORT_FILE), createReportHtml(result, './' + measurementId + '/'), 'utf8'),
+      fs.writeFile(path.join(pageDir, 'resultado.json'), json, 'utf8'),
+      fs.writeFile(path.join(pageDir, 'insertar.html'), createEmbedPage(result), 'utf8'),
+    ]);
+    await fs.writeFile(path.join(pageDir, 'badge.svg'), svg, 'utf8');
 
-    console.log(`Reporte generado: ${path.resolve(reportPath)}`);
+    console.log('Reporte generado: ' + path.join(reportDir, REPORT_FILE));
+    console.log('Distintivo e instrucciones: ' + path.join(pageDir, 'insertar.html'));
+    if (publicBase) console.log('Publica el contenido de ' + reportsDir + ' en ' + publicBase);
+    return { result, reportDir, pageDir };
   } finally {
-    if (browser) {
-      await browser.close();
-    }
+    if (browser) await browser.close();
   }
 }
 
-const url = process.argv[2];
-
-if (!url) {
-  console.error('Uso: node black-pixel-analyzer.js <url-del-sitio>');
-  console.error('Ejemplo: node black-pixel-analyzer.js https://example.com');
-  process.exit(1);
+function parseArguments(args) {
+  const options = {};
+  let url;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === '--help' || arg === '-h') return { help: true };
+    if (arg === '--public-base' || arg === '--output-dir') {
+      const value = args[++index];
+      if (!value || value.startsWith('--')) throw new Error('Falta un valor para ' + arg);
+      options[arg === '--public-base' ? 'publicBase' : 'outputDir'] = value;
+    } else if (arg.startsWith('-')) {
+      throw new Error('Opción desconocida: ' + arg);
+    } else if (url) {
+      throw new Error('Analiza una URL por ejecución.');
+    } else {
+      url = arg;
+    }
+  }
+  if (!url) throw new Error('Falta la URL de la página.');
+  return { url: normalizePageUrl(url), options: {
+    ...options, publicBase: normalizePublicBase(options.publicBase),
+  } };
 }
 
-try {
-  new URL(url);
-} catch {
-  console.error(`URL inválida: ${url}`);
-  console.error('Incluye el protocolo, por ejemplo: https://example.com');
-  process.exit(1);
+function printUsage() {
+  console.log('Uso: node black-pixel-analyzer.js <url> [--public-base <url>] [--output-dir <carpeta>]');
+  console.log('Ejemplo: npm run analyze -- https://example.com --public-base https://example.com/blackpixel/');
+  console.log('Sube la carpeta de resultados a --public-base para activar el distintivo público.');
 }
 
-analyzeBlackPixels(url).catch((error) => {
-  console.error(`No se pudo analizar ${url}`);
-  console.error(error.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  try {
+    const args = parseArguments(process.argv.slice(2));
+    if (args.help) {
+      printUsage();
+    } else {
+      analyzeBlackPixels(args.url, args.options).catch((error) => {
+        console.error('No se pudo completar el análisis: ' + error.message);
+        process.exitCode = 1;
+      });
+    }
+  } catch (error) {
+    console.error(error.message);
+    printUsage();
+    process.exitCode = 1;
+  }
+}
+
+module.exports = {
+  analyzeBlackPixels, parseArguments, getScrollPositions, getSustainabilityStatus,
+  createVisuals, createReportHtml,
+};
+

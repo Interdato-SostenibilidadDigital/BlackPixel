@@ -1,0 +1,111 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { Jimp, rgbaToInt } = require('jimp');
+const {
+  normalizePageUrl, normalizePublicBase, getPageKey, getPublicationLinks,
+  createBadgeSvg, createEmbedCode, createEmbedPage,
+} = require('../lib/badge');
+const { parseArguments, getScrollPositions, createVisuals } = require('../black-pixel-analyzer');
+
+function example() {
+  return {
+    url: 'https://example.com/productos?a=1&b=2',
+    createdAt: '2026-11-05T12:00:00.000Z',
+    percentage: 68.4, blackPixelCount: 3283200, totalPixels: 4800000,
+    publicBase: 'https://evidence.example/blackpixel/',
+    publication: getPublicationLinks('https://evidence.example/blackpixel/', 'page-key', 'run-1'),
+  };
+}
+
+test('la identidad conserva ruta, consulta y protocolo; los fragmentos comparten página', () => {
+  assert.equal(normalizePageUrl('https://EXAMPLE.com:443/a#footer'), 'https://example.com/a');
+  assert.equal(getPageKey('https://example.com/a#footer'), getPageKey('https://example.com/a'));
+  assert.notEqual(getPageKey('https://example.com/a'), getPageKey('https://example.com/b'));
+  assert.notEqual(getPageKey('https://example.com/a?view=1'), getPageKey('https://example.com/a?view=2'));
+  assert.notEqual(getPageKey('http://example.com/a'), getPageKey('https://example.com/a'));
+  assert.match(getPageKey('https://example.com/../../a'), /^[a-z0-9.-]+-[a-f0-9]{20}$/);
+});
+
+test('rechaza esquemas y credenciales no publicables', () => {
+  for (const url of ['file:///tmp/page', 'javascript:alert(1)', 'ftp://example.com', 'https://user:secret@example.com']) {
+    assert.throws(() => normalizePageUrl(url));
+  }
+});
+
+test('la base pública funciona en subcarpetas y rechaza consultas y fragmentos', () => {
+  assert.equal(normalizePublicBase('https://example.com/evidencia'), 'https://example.com/evidencia/');
+  assert.throws(() => normalizePublicBase('https://example.com/a?token=1'));
+  assert.throws(() => normalizePublicBase('https://example.com/a#b'));
+  const links = getPublicationLinks('https://example.com/root/', 'key', 'run');
+  assert.equal(links.badge, 'https://example.com/root/key/badge.svg');
+  assert.equal(links.evidence, 'https://example.com/root/key/run/reporte.html');
+});
+
+test('el SVG contiene porcentaje, cantidad, fecha y texto accesible; escapa datos', () => {
+  const result = example();
+  result.url += '"><script>alert(1)</script>';
+  const svg = createBadgeSvg(result);
+  assert.match(svg, /68\.40%/);
+  assert.match(svg, /3,283,200 px negros/);
+  assert.match(svg, /4,800,000 px analizados/);
+  assert.match(svg, /2026/);
+  assert.match(svg, /aria-labelledby="title desc"/);
+  assert.doesNotMatch(svg, /<script|<foreignObject|<image/);
+  assert.match(svg, /&lt;script&gt;/);
+  assert.ok(Buffer.byteLength(svg, 'utf8') < 3000);
+});
+
+test('el código enlaza al reporte, identifica el distintivo y mantiene un alt estable', () => {
+  const result = example();
+  const code = createEmbedCode(result);
+  assert.match(code, /data-blackpixel-badge/);
+  assert.match(code, /href="https:\/\/evidence.example\/blackpixel\/page-key\/reporte.html"/);
+  assert.match(code, /loading="lazy"/);
+  assert.match(code, /a=1&amp;b=2/);
+  assert.doesNotMatch(code, /<script|68\.4/);
+  assert.match(createEmbedPage(result), /&lt;a data-blackpixel-badge/);
+});
+
+test('el modo local explica cómo publicar sin inventar direcciones de instalación', () => {
+  const result = example();
+  result.publicBase = null;
+  result.publication = getPublicationLinks(null, 'key', 'run');
+  assert.equal(createEmbedCode(result), null);
+  assert.match(createEmbedPage(result), /Vista previa local/);
+  assert.match(createEmbedPage(result), /--public-base/);
+});
+
+test('la CLI acepta opciones y detecta argumentos incompletos antes de analizar', () => {
+  const args = parseArguments(['https://example.com/a#b', '--public-base', 'https://example.com/reports', '--output-dir', 'out']);
+  assert.equal(args.url, 'https://example.com/a');
+  assert.equal(args.options.publicBase, 'https://example.com/reports/');
+  assert.equal(args.options.outputDir, 'out');
+  assert.deepEqual(parseArguments(['--help']), { help: true });
+  for (const values of [[], ['https://example.com', '--public-base'], ['https://example.com', '--wat'], ['https://a.com', 'https://b.com']]) {
+    assert.throws(() => parseArguments(values));
+  }
+});
+
+test('las secciones no sobrepasan el final de la página', () => {
+  assert.deepEqual(getScrollPositions(2500, 800), [0, 800, 1600, 1700]);
+  assert.deepEqual(getScrollPositions(1600, 800), [0, 800]);
+  assert.deepEqual(getScrollPositions(400, 800), [0]);
+});
+
+test('el conteo omite las exclusiones y distingue negro puro de gris oscuro', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'blackpixel-unit-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const image = new Jimp({ width: 2, height: 2, color: rgbaToInt(0, 0, 0, 255) });
+  image.setPixelColor(rgbaToInt(1, 1, 1, 255), 1, 0);
+  image.setPixelColor(rgbaToInt(255, 255, 255, 255), 0, 1);
+  const map = path.join(dir, 'map.png');
+  const marked = path.join(dir, 'marked.png');
+  const result = await createVisuals(image, map, marked, Uint8Array.from([1, 0, 0, 0]));
+  assert.deepEqual(result, { blackPixelCount: 1, excludedPixelCount: 1 });
+  const markedImage = await Jimp.read(marked);
+  assert.equal(markedImage.getPixelColor(0, 0), rgbaToInt(0, 0, 0, 255));
+  assert.equal(markedImage.getPixelColor(1, 1), rgbaToInt(255, 0, 255, 255));
+});

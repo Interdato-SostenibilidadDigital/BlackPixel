@@ -1,1 +1,8 @@
 node black-pixel-analyzer.js https://tu-sitio.com
+
+# Generar distintivo con enlaces públicos (subir reports/ al hosting por separado)
+node black-pixel-analyzer.js https://tu-sitio.com --public-base https://tu-sitio.com/blackpixel/
+
+# Ejecutar las pruebas
+npm test
+

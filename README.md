@@ -1,134 +1,183 @@
 # BlackPixel
 
-BlackPixel es una herramienta de línea de comandos para analizar qué porcentaje
-de una página web está compuesto por píxeles negros puros (`#000000`).
+BlackPixel analiza qué porcentaje de una página web está compuesto por píxeles de negro puro (`#000000`) y genera un **distintivo para colocar en su footer**, acompañado de evidencia visual consultable.
 
-La idea del proyecto es ayudar a equipos de diseño y desarrollo a visualizar
-qué tan cerca está una interfaz de una experiencia más oscura y potencialmente
-más eficiente en pantallas OLED/AMOLED.
+Es una herramienta de línea de comandos en Node.js. Usa Puppeteer para capturar la página y Jimp para analizar sus píxeles. El distintivo se publica como un SVG estático con un enlace al reporte.
 
-> Importante: BlackPixel no mide consumo eléctrico real. Calcula la presencia
-> visual de negro puro en una captura de pantalla. El ahorro energético depende
-> del tipo de pantalla, brillo, contenido, dispositivo y comportamiento del
-> usuario. El beneficio del negro puro es más claro en pantallas OLED/AMOLED,
-> donde los píxeles negros pueden apagarse o consumir mucho menos energía. En
-> pantallas LCD, el impacto suele ser mucho menor porque existe una
-> retroiluminación activa.
+> BlackPixel mide presencia visual de negro puro. No mide consumo eléctrico, ahorro energético ni emisiones de CO₂, y no constituye una certificación ambiental. Los resultados corresponden a una URL, una captura de escritorio y una fecha.
 
-## Qué Genera
+## Novedades de la versión 1.1
 
-Cada análisis crea una carpeta dentro de `reports/` con un reporte visual. Si
-ya existía un reporte anterior del mismo sitio, BlackPixel lo elimina antes de
-generar el nuevo para evitar registros duplicados.
+- Distintivo SVG con porcentaje, cantidad de píxeles negros y fecha de medición.
+- Código HTML listo para copiar cuando se indica la dirección de publicación.
+- Reporte y datos JSON con URL, método, versión, dimensiones y evidencia visual.
+- Resultados separados por URL completa e historial de mediciones conservado.
+- Direcciones estables para actualizar el distintivo sin cambiar el código del footer.
+- Exclusión del propio distintivo en futuras mediciones mediante `data-blackpixel-badge`.
+- Pruebas automáticas de conteo, publicación e instalación.
 
-- `reporte.html`: reporte profesional con porcentaje, semáforo y recomendación.
-- `captura.png`: captura completa de la página analizada.
-- `captura-marcada.png`: pantallazo completo con las zonas negras marcadas en fucsia.
-- `mapa-negro.png`: visualización aislada de los píxeles detectados como negro puro.
+## Beneficios
 
-## Cómo Funciona
-
-BlackPixel usa Puppeteer para abrir un sitio web, recorre la página hasta el
-final para activar contenido diferido, captura la página por secciones mientras
-hace scroll y une esas secciones en una sola imagen vertical completa. Antes de
-capturar, oculta overlays flotantes como banners de cookies o botones fijos
-para evitar que se repitan en cada sección y distorsionen el análisis. Después
-analiza la imagen con Jimp.
-
-El resultado indica:
-
-- porcentaje de píxeles negros puros (`#000000`);
-- cantidad total de píxeles analizados;
-- estado de sostenibilidad visual según un semáforo;
-- recomendación general para mejorar la presencia de negro;
-- pantallazo completo con las áreas negras marcadas;
-- mapa visual de negro detectado.
-
-## Semáforo BlackPixel
-
-| Porcentaje de negro puro | Estado | Interpretación |
-| --- | --- | --- |
-| 66% o más | VERDE | Alta presencia de negro puro. Buen punto de partida para interfaces más eficientes en OLED/AMOLED. |
-| 33% a 65.99% | AMARILLO | Presencia media de negro puro. Hay oportunidad de oscurecer fondos, secciones y superficies principales. |
-| Menos de 33% | ROJO | Baja presencia de negro puro. La interfaz podría usar más áreas `#000000` si el objetivo es reducir consumo en OLED/AMOLED. |
+- **Comunicación concreta:** permite compartir cuánto negro puro tiene una página.
+- **Evidencia consultable:** el visitante puede revisar el resultado, la fecha y las capturas.
+- **Carga pequeña:** el SVG utiliza texto y formas, sin fuentes externas ni JavaScript en el sitio del usuario.
+- **Trabajo por análisis:** visitar el distintivo carga archivos guardados; no ejecuta Puppeteer ni vuelve a medir.
+- **Actualizaciones sencillas:** una nueva medición publicada actualiza las rutas estables y conserva la evidencia anterior.
 
 ## Instalación
 
-Necesitas tener instalado Node.js.
+Requisitos: Node.js 20 o superior y npm. Puppeteer descarga un navegador compatible durante la instalación. En Linux pueden ser necesarias las dependencias del sistema de Chrome.
 
-```powershell
-npm install
+```bash
+git clone https://github.com/Interdato-SostenibilidadDigital/BlackPixel.git
+cd BlackPixel
+npm ci
 ```
 
-## Uso
+## Analizar una página
 
-Analiza cualquier sitio pasando su URL:
-
-```powershell
+```bash
 npm run analyze -- https://tu-sitio.com
 ```
 
 También puedes ejecutar el script directamente:
 
-```powershell
+```bash
 node black-pixel-analyzer.js https://tu-sitio.com
 ```
 
-La URL debe incluir el protocolo (`https://` o `http://`).
+La consola indica dónde abrir `reporte.html` e `insertar.html`. Sin una dirección pública se genera una vista previa local del distintivo.
 
-Al terminar, la consola mostrará la ruta del reporte:
+## Publicar el distintivo en un sitio web
 
-```text
-Reporte generado: C:\ruta\BlackPixel\reports\2026-06-17T18-27-15-817Z-example.com\reporte.html
+### 1. Indica dónde alojarás los resultados
+
+```bash
+npm run analyze -- https://tu-sitio.com/productos --public-base https://tu-sitio.com/blackpixel/
 ```
 
-Abre ese archivo `reporte.html` en tu navegador para consultar el resultado.
+`--public-base` es la URL pública de la carpeta que contendrá **el contenido de `reports/`**. Puede estar en el mismo dominio o en otro alojamiento estático. Esta opción construye los enlaces; la subida al hosting se realiza por separado.
 
-## Contenido Del Reporte
+### 2. Sube los resultados
 
-El reporte HTML incluye:
+Copia el contenido de `reports/` a la ubicación indicada, conservando los nombres y las subcarpetas. Por ejemplo, la carpeta `<id-pagina>/` quedará disponible en `https://tu-sitio.com/blackpixel/<id-pagina>/`.
 
-- estado BlackPixel: `VERDE`, `AMARILLO` o `ROJO`;
-- porcentaje de negro puro;
-- cantidad de píxeles negros y píxeles totales;
-- URL analizada;
-- fecha de generación;
-- tamaño de la captura;
-- pantallazo completo con zonas negras marcadas;
-- captura original completa;
-- mapa visual de las áreas detectadas como negro puro;
-- lectura responsable sobre las limitaciones de la métrica.
+Configura el hosting para servir SVG como `image/svg+xml`, HTML como `text/html` y JSON como `application/json`. Puedes usar tu hosting existente: la publicación consiste en archivos estáticos.
 
-## Por Qué Negro Puro
+### 3. Copia el código generado
 
-En pantallas OLED/AMOLED, cada píxel emite su propia luz. Por eso, los colores
-oscuros y especialmente el negro puro pueden reducir el consumo del panel frente
-a interfaces claras. En LCD, en cambio, la retroiluminación suele mantenerse
-activa aunque el contenido sea oscuro, por lo que el ahorro no es equivalente.
+Abre `reports/<id-pagina>/insertar.html`. Copia el fragmento que contiene el enlace y la imagen, y pégalo en el footer o en un bloque de HTML personalizado **de la página analizada**.
 
-Este proyecto usa `#000000` de forma intencional porque el negro puro es el caso
-más directo para promover interfaces con menor emisión de luz en OLED/AMOLED.
+El código incluye texto alternativo, dimensiones reservadas, carga diferida y el atributo `data-blackpixel-badge`. Conserva este atributo para que el distintivo quede fuera de la siguiente medición.
+
+### 4. Comprueba la instalación
+
+Abre la página: debe aparecer el porcentaje y la cantidad de píxeles negros. Al hacer clic, debe abrirse el reporte con su fecha y capturas. Las direcciones de ese reporte y de sus imágenes deben ser accesibles públicamente.
+
+### 5. Actualiza cuando cambie la página
+
+Repite el mismo comando y vuelve a publicar los archivos. Las rutas estables `badge.svg` y `reporte.html` reflejan la nueva medición; el código del footer permanece válido.
+
+El porcentaje no se actualiza por sí solo al editar el sitio. Se actualiza después de analizar y publicar de nuevo. Configura el hosting para revalidar SVG, HTML y JSON de las rutas estables (por ejemplo, con `Cache-Control: no-cache`) y evitar que una caché muestre datos anteriores.
+
+## Qué se genera
+
+Cada URL obtiene una carpeta con un identificador derivado de su dirección normalizada. Dentro se conserva una subcarpeta fechada por cada medición.
+
+| Ruta dentro de `reports/<id-pagina>/` | Contenido |
+| --- | --- |
+| `badge.svg` | Distintivo de la última medición completada. |
+| `reporte.html` | Reporte estable que muestra la última medición. |
+| `resultado.json` | Datos de la última medición, incluida su dirección de evidencia histórica. |
+| `insertar.html` | Vista previa e instrucciones con el código de instalación. |
+| `<id-medicion>/reporte.html` | Reporte de esa medición concreta. |
+| `<id-medicion>/resultado.json` | Métricas y método de esa medición. |
+| `<id-medicion>/badge.svg` | Distintivo correspondiente a esa fecha. |
+| `<id-medicion>/captura.png` | Captura original completa. |
+| `<id-medicion>/captura-marcada.png` | Captura con los píxeles negros contabilizados marcados en fucsia. |
+| `<id-medicion>/mapa-negro.png` | Mapa: fucsia = negro contabilizado; azul = área del distintivo excluida; gris = otros píxeles. |
+
+Las mediciones anteriores no se eliminan. Al publicar una actualización conserva también sus carpetas, para que los enlaces de evidencia ya compartidos continúen funcionando. El historial ocupa espacio en proporción al tamaño y cantidad de capturas.
+
+**Cambio respecto a la versión 1.0:** los reportes antiguos se conservan en su ubicación original, pero no se migran al nuevo esquema. Ejecuta un nuevo análisis para obtener el distintivo y las nuevas rutas.
+
+## Medición por página
+
+Cada URL tiene su propio resultado. `/`, `/productos` y `/contacto` se analizan por separado. También se distinguen HTTP/HTTPS, rutas, barras finales y parámetros de consulta. Los fragmentos como `#footer` se omiten porque identifican una posición dentro del mismo documento.
+
+El reporte registra la URL solicitada y la URL final después de redirecciones. La carpeta se identifica a partir de la URL solicitada.
+
+Un distintivo de una página no representa automáticamente al dominio entero. Para mostrar resultados de distintas páginas, analiza cada URL y utiliza el fragmento correspondiente en cada una. Un footer global con el mismo código seguirá mostrando el resultado de la URL que se analizó.
+
+## Método y alcance
+
+1. Abre la URL con Puppeteer en un viewport de **1200 × 800 píxeles CSS**, con escala de captura 1.
+2. Recorre la página para activar contenido diferido.
+3. Oculta elementos flotantes `fixed` o `sticky`, salvo ciertas barras superiores y el distintivo identificado.
+4. Captura por secciones y las une en una imagen vertical.
+5. Identifica los rectángulos visibles de elementos con `data-blackpixel-badge` y excluye sus áreas del conteo.
+6. Cuenta píxeles cuyo RGB es exactamente `(0, 0, 0)`.
+
+```text
+píxeles analizados = píxeles capturados − píxeles excluidos
+porcentaje de negro puro = píxeles negros / píxeles analizados × 100
+```
+
+El JSON conserva las cantidades sin redondear y el porcentaje completo. El SVG y el reporte muestran el porcentaje con dos decimales. La cantidad corresponde a píxeles de la captura analizada, no al número de píxeles físicos de un dispositivo del visitante.
+
+## Semáforo
+
+Los umbrales son criterios internos de comunicación del proyecto, no una escala energética validada.
+
+| Porcentaje de negro puro | Estado | Lectura |
+| --- | --- | --- |
+| 66 % o más | VERDE | Alta presencia de negro puro. |
+| Desde 33 % hasta menos de 66 % | AMARILLO | Presencia media de negro puro. |
+| Menos de 33 % | ROJO | Baja presencia de negro puro. |
+
+El distintivo comunica la métrica y su fecha; el semáforo y las recomendaciones se consultan en el reporte.
+
+## Opciones
+
+| Opción | Uso |
+| --- | --- |
+| `<url>` | Una URL HTTP o HTTPS por ejecución, sin credenciales. |
+| `--public-base <url>` | Carpeta pública de los resultados; sin consulta ni fragmento. |
+| `--output-dir <carpeta>` | Carpeta local de salida. Predeterminada: `reports/`. |
+| `--help` | Muestra la ayuda. |
+
+```bash
+npm run analyze -- https://tu-sitio.com/contacto --public-base https://evidencia.tu-sitio.com/blackpixel/ --output-dir reports
+```
+
+## Pruebas
+
+```bash
+npm test
+```
+
+Las pruebas de integración usan un servidor local y el navegador instalado por Puppeteer. Verifican cantidades conocidas de negro, exclusión de distintivos, conservación del historial, separación de URLs, generación de enlaces e instalación del SVG en el navegador.
+
+Puedes ejecutar cada grupo por separado con `npm run test:unit` o `npm run test:integration`.
+
+## Limitaciones y uso responsable
+
+- Solo se cuenta negro exacto; grises como `#111111` no cuentan.
+- El resultado depende del viewport, contenido dinámico, anuncios, cookies, animaciones y redirecciones.
+- Es una captura de escritorio en una sesión nueva; no representa todas las variantes móviles o personalizadas.
+- La captura por secciones puede repetir barras superiores conservadas u otros elementos que cambien con el scroll.
+- Sitios con scroll infinito, contenido virtualizado, bloqueos a navegadores automatizados o páginas muy grandes pueden requerir adaptaciones.
+- El distintivo prueba qué resultado generó el analizador y permite revisar su evidencia; los archivos estáticos son editables y no cuentan con firma criptográfica ni verificación independiente.
+- Utiliza expresiones como **“Presencia de negro puro medida con BlackPixel”** y acompáñalas de la fecha y la URL.
+- La carpeta `reports/` está ignorada por git. Publicar el código del repositorio no publica los resultados de los análisis.
+
+## Contexto de sostenibilidad digital
+
+El proyecto busca facilitar la observación y comunicación de una característica del diseño que puede ser relevante para pantallas OLED/AMOLED. En ellas, la relación entre color y energía difiere de las pantallas LCD con retroiluminación. El porcentaje de negro, por sí solo, no permite cuantificar ahorro: hacen falta mediciones del dispositivo, brillo, contenido y uso.
 
 ## Referencias
 
-- ResearchGate: figura sobre consumo de potencia ajustado para componentes RGB
-  de un píxel OLED:
-  https://www.researchgate.net/figure/Linear-fitted-power-consumption-for-the-R-G-and-B-components-of-an-OLED-pixel-by_fig2_311759321
-- Dash, P. y Hu, Y. C. (2021). "How much battery does dark mode save? An
-  Accurate OLED Display Power Profiler for Modern Smartphones". ACM MobiSys
-  2021. DOI: https://doi.org/10.1145/3458864.3467682
-- Purdue University: resumen de investigación sobre ahorro de batería en modo
-  oscuro y pantallas OLED:
-  https://www.purdue.edu/newsroom/archive/releases/2021/Q3/dark-mode-may-not-save-your-phones-battery-life-as-much-as-you-think%2C-but-there-are-a-few-silver-linings.html
+- Dash, P. y Hu, Y. C. (2021). *How much battery does dark mode save? An Accurate OLED Display Power Profiler for Modern Smartphones*. ACM MobiSys. https://doi.org/10.1145/3458864.3467682
+- Purdue University: [resumen de la investigación sobre modo oscuro y pantallas OLED](https://www.purdue.edu/newsroom/archive/releases/2021/Q3/dark-mode-may-not-save-your-phones-battery-life-as-much-as-you-think%2C-but-there-are-a-few-silver-linings.html).
+- MDN: [incluir imágenes SVG en HTML](https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Structuring_content/Including_vector_graphics_in_HTML).
 
-## Limitaciones
-
-- BlackPixel mide una captura renderizada, no el CSS directamente.
-- Solo cuenta píxeles exactamente `#000000`; grises muy oscuros como `#111111`
-  no cuentan como negro puro.
-- El porcentaje puede cambiar si el sitio muestra banners, cookies, anuncios,
-  contenido dinámico o estados personalizados por ubicación.
-- El resultado debe interpretarse como una métrica de conciencia y diseño, no
-  como una certificación ambiental.
-- El reporte se guarda localmente en `reports/`; esa carpeta está ignorada por
-  git porque contiene resultados generados.
