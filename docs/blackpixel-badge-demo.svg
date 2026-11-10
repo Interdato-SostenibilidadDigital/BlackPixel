@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="130" viewBox="0 0 360 130" role="img" aria-labelledby="title desc">
+<title id="title">Ejemplo ilustrativo con datos simulados. BlackPixel: 68.40% de negro puro</title>
+<desc id="desc">Vista de demostración, no corresponde a una medición real. 68.40% de negro puro; 3,283,200 de 4,800,000 píxeles analizados. URL: https://example.com/productos. Medición: 2026-11-10T12:00:00.000Z. Indicador visual, no medición de energía ni certificación ambiental.</desc>
+<rect x="0.5" y="0.5" width="359" height="103" rx="10" fill="#000000" stroke="#737373"/>
+<g fill="#ffffff" font-family="Arial, Helvetica, sans-serif">
+<text x="16" y="22" font-size="14" font-weight="700">BlackPixel</text>
+<text x="344" y="21" text-anchor="end" font-size="9" letter-spacing="0.8">NEGRO PURO · #000000</text>
+<text x="16" y="60" font-size="32" font-weight="700">68.40%</text>
+<text x="344" y="46" text-anchor="end" font-size="13" font-weight="700">3,283,200 px negros</text>
+<text x="344" y="62" text-anchor="end" font-size="10">de 4,800,000 px analizados</text>
+<path d="M16 74H344" stroke="#737373"/>
+<text x="16" y="91" font-size="10">Medición visual · 10 nov 2026</text>
+<text x="344" y="91" text-anchor="end" font-size="11">Ver reporte →</text>
+</g><rect x="0.5" y="110.5" width="359" height="19" rx="4" fill="#f1f5f9" stroke="#737373"/><text x="180" y="124" text-anchor="middle" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="10" font-weight="700">EJEMPLO ILUSTRATIVO · DATOS SIMULADOS</text></svg>

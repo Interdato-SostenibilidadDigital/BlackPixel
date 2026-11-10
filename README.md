@@ -6,6 +6,38 @@ Es una herramienta de línea de comandos en Node.js. Usa Puppeteer para capturar
 
 > BlackPixel mide presencia visual de negro puro. No mide consumo eléctrico, ahorro energético ni emisiones de CO₂, y no constituye una certificación ambiental. Los resultados corresponden a una URL, una captura de escritorio y una fecha.
 
+## Vista previa del distintivo
+
+![Ejemplo del distintivo BlackPixel con porcentaje de negro puro, cantidad de píxeles y fecha](docs/blackpixel-badge-demo.svg)
+
+**Ejemplo ilustrativo con datos simulados:** 68.40 % de negro puro; 3,283,200 píxeles negros de 4,800,000 analizados. Cada análisis genera este mismo diseño con los resultados y la fecha de la página medida.
+
+El distintivo real se crea en `reports/<id-pagina>/badge.svg`. Al colocarlo en un sitio, el visitante puede hacer clic para consultar el reporte con su URL, fecha y capturas.
+
+### Ejemplo del código para el footer
+
+El siguiente fragmento muestra la estructura. Para tu sitio, copia las direcciones exactas desde `insertar.html`, generado al ejecutar el análisis con `--public-base`. `ID-DE-LA-PAGINA` representa la carpeta que crea el analizador.
+
+```html
+<a data-blackpixel-badge
+   href="https://tu-sitio.com/blackpixel/ID-DE-LA-PAGINA/reporte.html"
+   target="_blank" rel="noopener noreferrer"
+   style="display:inline-block;max-width:100%">
+  <img src="https://tu-sitio.com/blackpixel/ID-DE-LA-PAGINA/badge.svg"
+       alt="BlackPixel: consultar la medición de negro puro de esta página"
+       width="360" height="104" loading="lazy" decoding="async"
+       style="display:block;max-width:100%;height:auto">
+</a>
+```
+
+Para generar los archivos y el código de instalación:
+
+```bash
+npm run analyze -- https://tu-sitio.com --public-base https://tu-sitio.com/blackpixel/
+```
+
+Después publica el contenido de `reports/` en la carpeta indicada y pega el código de `insertar.html` en el footer. El comando prepara los archivos y enlaces; la subida al hosting se realiza en el paso de publicación descrito abajo.
+
 ## Novedades de la versión 1.1
 
 - Distintivo SVG con porcentaje, cantidad de píxeles negros y fecha de medición.
@@ -180,4 +212,3 @@ El proyecto busca facilitar la observación y comunicación de una característi
 - Dash, P. y Hu, Y. C. (2021). *How much battery does dark mode save? An Accurate OLED Display Power Profiler for Modern Smartphones*. ACM MobiSys. https://doi.org/10.1145/3458864.3467682
 - Purdue University: [resumen de la investigación sobre modo oscuro y pantallas OLED](https://www.purdue.edu/newsroom/archive/releases/2021/Q3/dark-mode-may-not-save-your-phones-battery-life-as-much-as-you-think%2C-but-there-are-a-few-silver-linings.html).
 - MDN: [incluir imágenes SVG en HTML](https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Structuring_content/Including_vector_graphics_in_HTML).
-
