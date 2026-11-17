@@ -23,7 +23,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@playwright/browser-chromium": "1.65.0",
+    "@playwright/browser-chromium": "1.65.1",
     "playwright-core": "1.65.0",
     "pngjs": "7.0.0"
   }
